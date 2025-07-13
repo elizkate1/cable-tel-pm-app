@@ -3,7 +3,6 @@ import React, { useState, useEffect, createContext, useContext, useCallback } fr
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from 'firebase/firestore';
-// Import the functions you need from the SDKs you need
 // Removed getAnalytics as it was unused and causing a warning.
 
 // Create a context for Firebase services
@@ -32,8 +31,6 @@ function FirebaseProvider({ children }) {
           measurementId: "G-CT2214WYCQ"
         };
 
-        // Using the Firebase projectId as the unique identifier for data within Firestore
-        const canvasAppId = firebaseConfig.projectId; // This is crucial for data path in Firestore
         const initialAuthToken = null; // Keeping null for anonymous sign-in as discussed
 
         if (!firebaseConfig.apiKey) {
@@ -42,9 +39,6 @@ function FirebaseProvider({ children }) {
 
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
-        // Analytics initialization removed as it was unused and causing a warning.
-        // const analytics = getAnalytics(app); 
-
         const firestore = getFirestore(app);
         const firebaseAuth = getAuth(app);
 
@@ -95,8 +89,7 @@ function FirebaseProvider({ children }) {
     );
   }
 
-  // Pass the canvasAppId to the context provider
-  // Ensure db.app.options.projectId is available before using it
+  // Pass the Firebase projectId to the context provider
   return (
     <FirebaseContext.Provider value={{ db, auth, userId, appId: db?.app?.options?.projectId || 'default-fiber-pm-app' }}>
       {children}
@@ -109,17 +102,6 @@ function useFirebase() {
   return useContext(FirebaseContext);
 }
 
-// Firestore collection reference functions (moved outside components for stability)
-// Wrapped in useCallback to ensure stable function references for useEffect dependencies
-const getProjectsCollectionRef = useCallback((db, appId) => {
-  return collection(db, `artifacts/${appId}/public/data/projects`);
-}, []); // Empty dependency array means this function reference is stable
-
-const getTasksCollectionRef = useCallback((db, appId, projId) => {
-  return collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
-}, []); // Empty dependency array means this function reference is stable
-
-
 // Main App Component
 function App() {
   const { db, userId, appId } = useFirebase();
@@ -131,13 +113,21 @@ function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [activeView, setActiveView] = useState('list'); // 'list' or 'detail'
 
+  // Firestore collection reference functions (now correctly inside the component)
+  const getProjectsCollectionRef = useCallback(() => {
+    return collection(db, `artifacts/${appId}/public/data/projects`);
+  }, [db, appId]); // Dependencies for useCallback
+
+  const getTasksCollectionRef = useCallback((projId) => {
+    return collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
+  }, [db, appId]); // Dependencies for useCallback
+
 
   // Fetch projects from Firestore
   useEffect(() => {
     if (!db || !userId) return;
 
-    // Pass db and appId to the ref function
-    const projectsRef = getProjectsCollectionRef(db, appId);
+    const projectsRef = getProjectsCollectionRef(); // Call the function to get the ref
     const q = query(projectsRef, orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const projectsData = snapshot.docs.map(doc => ({
@@ -151,8 +141,6 @@ function App() {
       setLoadingProjects(false);
     });
 
-    // Cleanup subscription on unmount
-    // getProjectsCollectionRef is now a stable function due to useCallback
     return () => unsubscribe();
   }, [db, userId, appId, getProjectsCollectionRef]); // Added getProjectsCollectionRef to dependency array
 
@@ -190,13 +178,12 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-50 font-sans antialiased">
       {/* Header */}
-      {/* Changed header background to reflect Cable Tel Services, Inc. logo colors */}
-      <header className="bg-[#003366] text-white p-4 shadow-lg"> {/* Dark Blue from logo */}
+      <header className="bg-[#003366] text-white p-4 shadow-lg">
         <div className="container mx-auto flex justify-between items-center">
           <h1 className="text-3xl font-bold tracking-tight">Cable Tel Services, Inc. Project Management Tool</h1>
           {userId && (
             <div className="text-sm">
-              User ID: <span className="font-mono bg-[#0056b3] px-2 py-1 rounded-md"> {/* Slightly lighter blue for contrast */}
+              User ID: <span className="font-mono bg-[#0056b3] px-2 py-1 rounded-md">
                 {userId}
               </span>
             </div>
@@ -246,7 +233,6 @@ function ProjectListView({ projects, onSelectProject, onAddProject }) {
         <h2 className="text-3xl font-extrabold text-gray-800">Fiber Optic Projects</h2>
         <button
           onClick={onAddProject}
-          // Changed button color to reflect Cable Tel Services, Inc. logo green
           className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
         >
           + Add New Project
@@ -267,7 +253,6 @@ function ProjectListView({ projects, onSelectProject, onAddProject }) {
               <p className="text-sm text-gray-600 mb-4 line-clamp-2">{project.description}</p>
               <div className="flex items-center text-sm text-gray-500">
                 <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  // Adjusted status badge colors to complement the new theme
                   project.status === 'Planned' ? 'bg-blue-100 text-blue-800' :
                   project.status === 'In Progress' ? 'bg-yellow-100 text-yellow-800' :
                   project.status === 'Completed' ? 'bg-green-100 text-green-800' :
@@ -300,10 +285,8 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false); // State for confirmation modal
 
   // Firestore collection references
-  // Use useCallback for these functions to ensure stable references
-  const projectsCollectionRef = useCallback(() => getProjectsCollectionRef(db, appId), [db, appId]);
-  const tasksCollectionRef = useCallback((projId) => getTasksCollectionRef(db, appId, projId), [db, appId]);
-
+  const projectsCollectionRef = useCallback(() => collection(db, `artifacts/${appId}/public/data/projects`), [db, appId]);
+  const tasksCollectionRef = useCallback((projId) => collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`), [db, appId]);
 
   // Fetch project details
   useEffect(() => {
@@ -400,7 +383,6 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
         <div className="flex space-x-3">
           <button
             onClick={() => setShowEditProjectForm(true)}
-            // Changed button color to reflect Cable Tel Services, Inc. logo green
             className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
           >
             Edit Project
@@ -459,7 +441,6 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
           <h3 className="text-2xl font-bold text-gray-800 mb-4">Tasks</h3>
           <button
             onClick={() => onAddTask(project.id)}
-            // Changed button color to reflect Cable Tel Services, Inc. logo green
             className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 mb-6"
           >
             + Add New Task
@@ -629,7 +610,6 @@ function ProjectForm({ projectToEdit, onSave, onCancel }) {
           </button>
           <button
             type="submit"
-            // Changed button color to reflect Cable Tel Services, Inc. logo green
             className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
             disabled={loading}
           >
@@ -693,7 +673,6 @@ function TaskItem({ task, projectId }) {
           <div className="flex justify-end space-x-2 mt-4">
             <button
               onClick={() => setIsEditing(true)}
-              // Changed button color to reflect Cable Tel Services, Inc. logo green
               className="text-[#33cc33] hover:text-[#28a428] font-medium text-sm transition duration-300"
             >
               Edit
@@ -874,7 +853,6 @@ function TaskForm({ projectId, taskToEdit, onSave, onCancel }) {
           </button>
           <button
             type="submit"
-            // Changed button color to reflect Cable Tel Services, Inc. logo green
             className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
             disabled={loading}
           >
