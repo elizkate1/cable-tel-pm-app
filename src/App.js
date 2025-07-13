@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, createContext, useContext } from 'react'; // Removed useCallback from import
 // ALL FIREBASE IMPORTS MUST BE AT THE TOP LEVEL OF THE FILE
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
@@ -102,6 +102,16 @@ function useFirebase() {
   return useContext(FirebaseContext);
 }
 
+// Firestore collection reference functions (moved OUTSIDE components, no useCallback needed here)
+const getProjectsCollectionRef = (db, appId) => {
+  return collection(db, `artifacts/${appId}/public/data/projects`);
+};
+
+const getTasksCollectionRef = (db, appId, projId) => {
+  return collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
+};
+
+
 // Main App Component
 function App() {
   const { db, userId, appId } = useFirebase();
@@ -113,21 +123,13 @@ function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [activeView, setActiveView] = useState('list'); // 'list' or 'detail'
 
-  // Firestore collection reference functions (now correctly inside the component)
-  const getProjectsCollectionRef = useCallback(() => {
-    return collection(db, `artifacts/${appId}/public/data/projects`);
-  }, [db, appId]); // Dependencies for useCallback
-
-  const getTasksCollectionRef = useCallback((projId) => {
-    return collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
-  }, [db, appId]); // Dependencies for useCallback
-
 
   // Fetch projects from Firestore
   useEffect(() => {
     if (!db || !userId) return;
 
-    const projectsRef = getProjectsCollectionRef(); // Call the function to get the ref
+    // Call the function to get the ref, passing db and appId
+    const projectsRef = getProjectsCollectionRef(db, appId);
     const q = query(projectsRef, orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const projectsData = snapshot.docs.map(doc => ({
@@ -142,7 +144,7 @@ function App() {
     });
 
     return () => unsubscribe();
-  }, [db, userId, appId, getProjectsCollectionRef]); // Added getProjectsCollectionRef to dependency array
+  }, [db, userId, appId]); // No need to include getProjectsCollectionRef in dependencies now, as it's a stable external function
 
   const handleSelectProject = (projectId) => {
     setSelectedProjectId(projectId);
@@ -285,14 +287,17 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false); // State for confirmation modal
 
   // Firestore collection references
-  const projectsCollectionRef = useCallback(() => collection(db, `artifacts/${appId}/public/data/projects`), [db, appId]);
-  const tasksCollectionRef = useCallback((projId) => collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`), [db, appId]);
+  // These are now regular functions, not hooks, so they can be defined outside or inside
+  // but if inside, they don't need useCallback if their dependencies are stable.
+  // For simplicity and to avoid lint warnings, we'll just call them directly with db and appId.
+  const projectsCollectionRef = getProjectsCollectionRef(db, appId);
+  const tasksCollectionRef = (projId) => getTasksCollectionRef(db, appId, projId);
 
   // Fetch project details
   useEffect(() => {
     if (!db || !projectId) return;
 
-    const docRef = doc(projectsCollectionRef(), projectId); // Call the function to get the ref
+    const docRef = doc(projectsCollectionRef, projectId); // Use the direct ref
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         setProject({ id: docSnap.id, ...docSnap.data() });
@@ -307,7 +312,7 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
     });
 
     return () => unsubscribe();
-  }, [db, projectId, projectsCollectionRef]); // Add projectsCollectionRef to dependency array
+  }, [db, projectId, projectsCollectionRef]); // projectsCollectionRef is now a stable variable
 
   // Fetch tasks for the project
   useEffect(() => {
@@ -327,7 +332,7 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
     });
 
     return () => unsubscribe();
-  }, [db, projectId, tasksCollectionRef]); // Add tasksCollectionRef to dependency array
+  }, [db, projectId, tasksCollectionRef]); // tasksCollectionRef is now a stable variable
 
   const handleDeleteProject = async () => {
     try {
@@ -338,7 +343,7 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
         await Promise.all(deletePromises);
 
         // Then delete the project
-        await deleteDoc(doc(projectsCollectionRef(), project.id)); // Call the function
+        await deleteDoc(doc(projectsCollectionRef, project.id)); // Use the direct ref
         onBack(); // Go back to list after deletion
       }
     } catch (error) {
@@ -393,483 +398,483 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
           >
             Delete Project
           </button>
+          </div>
         </div>
+
+        {showEditProjectForm ? (
+          <ProjectForm
+            projectToEdit={project}
+            onSave={() => setShowEditProjectForm(false)}
+            onCancel={() => setShowEditProjectForm(false)}
+          />
+        ) : (
+          <>
+            <h2 className="text-4xl font-extrabold text-gray-900 mb-4">{project.name}</h2>
+            <p className="text-gray-700 text-lg mb-6">{project.description}</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <p className="text-blue-800 font-semibold">Status:</p>
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                  project.status === 'Planned' ? 'bg-blue-200 text-blue-900' :
+                  project.status === 'In Progress' ? 'bg-yellow-100 text-yellow-800' :
+                  project.status === 'Completed' ? 'bg-green-100 text-green-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {project.status}
+                </span>
+              </div>
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <p className="text-blue-800 font-semibold">Created At:</p>
+                <p className="text-gray-700">{project.createdAt ? new Date(project.createdAt.toDate()).toLocaleString() : 'N/A'}</p>
+              </div>
+              {/* Placeholder for Geospatial Data */}
+              <div className="bg-blue-50 p-4 rounded-lg md:col-span-2">
+                <p className="text-blue-800 font-semibold mb-2">Geospatial Overview (Placeholder):</p>
+                <img
+                  src="https://placehold.co/600x200/e0e7ff/4338ca?text=Map+View+Placeholder"
+                  alt="Map Placeholder"
+                  className="w-full h-48 object-cover rounded-md border border-blue-200"
+                  onError={(e) => e.target.src = "https://placehold.co/600x200/cccccc/333333?text=Image+Load+Error"}
+                />
+                <p className="text-sm text-gray-600 mt-2">
+                  (In a real application, this would be an interactive map displaying fiber routes, splice points, and assets.)
+                </p>
+              </div>
+            </div>
+
+            <h3 className="text-2xl font-bold text-gray-800 mb-4">Tasks</h3>
+            <button
+              onClick={() => onAddTask(project.id)}
+              className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 mb-6"
+            >
+              + Add New Task
+            </button>
+
+            {tasks.length === 0 ? (
+              <p className="text-gray-600 text-center py-5">No tasks for this project yet. Add the first one!</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {tasks.map(task => (
+                  <TaskItem key={task.id} task={task} projectId={project.id} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Confirmation Modal for Deletion */}
+        {showConfirmDelete && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+            <div className="bg-white p-8 rounded-lg shadow-2xl max-w-sm w-full text-center">
+              <h3 className="text-xl font-bold text-gray-800 mb-4">Confirm Deletion</h3>
+              <p className="text-gray-600 mb-6">Are you sure you want to delete this project and all its tasks? This action cannot be undone.</p>
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => setShowConfirmDelete(false)}
+                  className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteProject}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+    );
+  }
 
-      {showEditProjectForm ? (
-        <ProjectForm
-          projectToEdit={project}
-          onSave={() => setShowEditProjectForm(false)}
-          onCancel={() => setShowEditProjectForm(false)}
-        />
-      ) : (
-        <>
-          <h2 className="text-4xl font-extrabold text-gray-900 mb-4">{project.name}</h2>
-          <p className="text-gray-700 text-lg mb-6">{project.description}</p>
+  // Project Form Component (Add/Edit)
+  function ProjectForm({ projectToEdit, onSave, onCancel }) {
+    const { db, appId } = useFirebase();
+    const [name, setName] = useState(projectToEdit?.name || '');
+    const [description, setDescription] = useState(projectToEdit?.description || '');
+    const [status, setStatus] = useState(projectToEdit?.status || 'Planned');
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState('');
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <p className="text-blue-800 font-semibold">Status:</p>
-              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                project.status === 'Planned' ? 'bg-blue-200 text-blue-900' :
-                project.status === 'In Progress' ? 'bg-yellow-100 text-yellow-800' :
-                project.status === 'Completed' ? 'bg-green-100 text-green-800' :
+    const isEditing = !!projectToEdit;
+
+    const handleSubmit = async (e) => {
+      e.preventDefault();
+      setLoading(true);
+      setMessage('');
+
+      if (!db) {
+        setMessage('Database not initialized.');
+        setLoading(false);
+        return;
+      }
+
+      if (!name || !description) {
+        setMessage('Please fill in all required fields.');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const projectData = {
+          name,
+          description,
+          status,
+          updatedAt: serverTimestamp(),
+        };
+
+        // Ensure that appId is correctly passed to getProjectsCollectionRef
+        const projectsCollectionRefInstance = getProjectsCollectionRef(db, appId); // Get instance of ref
+
+        if (isEditing) {
+          const projectRef = doc(projectsCollectionRefInstance, projectToEdit.id);
+          await updateDoc(projectRef, projectData);
+          setMessage('Project updated successfully!');
+        } else {
+          projectData.createdAt = serverTimestamp();
+          await addDoc(projectsCollectionRefInstance, projectData); // Use instance of ref
+          setMessage('Project added successfully!');
+          setName('');
+          setDescription('');
+          setStatus('Planned');
+        }
+        onSave(); // Call the onSave callback to close the form
+      } catch (error) {
+        console.error("Error saving project:", error);
+        setMessage(`Error saving project: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="bg-white p-8 rounded-lg shadow-xl">
+        <h2 className="text-3xl font-extrabold text-gray-800 mb-6">{isEditing ? 'Edit Project' : 'Add New Project'}</h2>
+        <form onSubmit={handleSubmit}>
+          <div className="mb-4">
+            <label htmlFor="name" className="block text-gray-700 text-sm font-bold mb-2">
+              Project Name:
+            </label>
+            <input
+              type="text"
+              id="name"
+              className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              disabled={loading}
+            />
+          </div>
+          <div className="mb-4">
+            <label htmlFor="description" className="block text-gray-700 text-sm font-bold mb-2">
+              Description:
+            </label>
+            <textarea
+              id="description"
+              rows="4"
+              className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              required
+              disabled={loading}
+            ></textarea>
+          </div>
+          <div className="mb-6">
+            <label htmlFor="status" className="block text-gray-700 text-sm font-bold mb-2">
+              Status:
+            </label>
+            <select
+              id="status"
+              className="shadow border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              disabled={loading}
+            >
+              <option value="Planned">Planned</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="On Hold">On Hold</option>
+            </select>
+          </div>
+          {message && (
+            <p className={`text-sm mb-4 ${message.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>
+              {message}
+            </p>
+          )}
+          <div className="flex justify-end space-x-4">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
+              disabled={loading}
+            >
+              {loading ? 'Saving...' : (isEditing ? 'Update Project' : 'Add Project')}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  // Task Item Component
+  function TaskItem({ task, projectId }) {
+    const { db, appId } = useFirebase();
+    const [isEditing, setIsEditing] = useState(false);
+    const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+
+    // Firestore collection reference for tasks
+    const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
+
+    const handleDeleteTask = async () => {
+      try {
+        await deleteDoc(doc(tasksCollectionRefInstance, task.id)); // Use instance of ref
+        console.log("Task deleted successfully!");
+      } catch (error) {
+        console.error("Error deleting task:", error);
+      } finally {
+        setShowConfirmDelete(false); // Close modal
+      }
+    };
+
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 shadow-sm mb-4">
+        {isEditing ? (
+          <TaskForm
+            projectId={projectId}
+            taskToEdit={task}
+            onSave={() => setIsEditing(false)}
+            onCancel={() => setIsEditing(false)}
+          />
+        ) : (
+          <>
+            <h4 className="text-lg font-semibold text-gray-900 mb-2">{task.name}</h4>
+            <p className="text-sm text-gray-600 mb-2">Assigned To: <span className="font-medium">{task.assignedTo || 'Unassigned'}</span></p>
+            <p className="text-sm text-gray-600 mb-2">Materials: <span className="font-medium">{task.materialsNeeded || 'None'}</span></p>
+            <div className="flex items-center text-sm text-gray-500">
+              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                task.status === 'Planned' ? 'bg-blue-100 text-blue-800' :
+                task.status === 'In Progress' ? 'bg-yellow-100 text-yellow-800' :
+                task.status === 'Completed' ? 'bg-green-100 text-green-800' :
                 'bg-gray-100 text-gray-800'
               }`}>
-                {project.status}
+                {task.status}
               </span>
+              {task.createdAt && (
+                <span className="ml-auto text-gray-500">
+                  Created: {new Date(task.createdAt.toDate()).toLocaleDateString()}
+                </span>
+              )}
             </div>
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <p className="text-blue-800 font-semibold">Created At:</p>
-              <p className="text-gray-700">{project.createdAt ? new Date(project.createdAt.toDate()).toLocaleString() : 'N/A'}</p>
+            <div className="flex justify-end space-x-2 mt-4">
+              <button
+                onClick={() => setIsEditing(true)}
+                className="text-[#33cc33] hover:text-[#28a428] font-medium text-sm transition duration-300"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => setShowConfirmDelete(true)}
+                className="text-red-600 hover:text-red-800 font-medium text-sm transition duration-300"
+              >
+                Delete
+              </button>
             </div>
-            {/* Placeholder for Geospatial Data */}
-            <div className="bg-blue-50 p-4 rounded-lg md:col-span-2">
-              <p className="text-blue-800 font-semibold mb-2">Geospatial Overview (Placeholder):</p>
-              <img
-                src="https://placehold.co/600x200/e0e7ff/4338ca?text=Map+View+Placeholder"
-                alt="Map Placeholder"
-                className="w-full h-48 object-cover rounded-md border border-blue-200"
-                onError={(e) => e.target.src = "https://placehold.co/600x200/cccccc/333333?text=Image+Load+Error"}
-              />
-              <p className="text-sm text-gray-600 mt-2">
-                (In a real application, this would be an interactive map displaying fiber routes, splice points, and assets.)
-              </p>
+          </>
+        )}
+
+        {/* Confirmation Modal for Deletion */}
+        {showConfirmDelete && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+            <div className="bg-white p-8 rounded-lg shadow-2xl max-w-sm w-full text-center">
+              <h3 className="text-xl font-bold text-gray-800 mb-4">Confirm Task Deletion</h3>
+              <p className="text-gray-600 mb-6">Are you sure you want to delete this task? This action cannot be undone.</p>
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => setShowConfirmDelete(false)}
+                  className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteTask}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
+        )}
+      </div>
+    );
+  }
 
-          <h3 className="text-2xl font-bold text-gray-800 mb-4">Tasks</h3>
-          <button
-            onClick={() => onAddTask(project.id)}
-            className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 mb-6"
-          >
-            + Add New Task
-          </button>
+  // Task Form Component (Add/Edit)
+  function TaskForm({ projectId, taskToEdit, onSave, onCancel }) {
+    const { db, appId } = useFirebase();
+    const [name, setName] = useState(taskToEdit?.name || '');
+    const [assignedTo, setAssignedTo] = useState(taskToEdit?.assignedTo || '');
+    const [status, setStatus] = useState(taskToEdit?.status || 'Planned');
+    const [materialsNeeded, setMaterialsNeeded] = useState(taskToEdit?.materialsNeeded || '');
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState('');
 
-          {tasks.length === 0 ? (
-            <p className="text-gray-600 text-center py-5">No tasks for this project yet. Add the first one!</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {tasks.map(task => (
-                <TaskItem key={task.id} task={task} projectId={project.id} />
-              ))}
-            </div>
+    const isEditing = !!taskToEdit;
+
+    const handleSubmit = async (e) => {
+      e.preventDefault();
+      setLoading(true);
+      setMessage('');
+
+      if (!db) {
+        setMessage('Database not initialized.');
+        setLoading(false);
+        return;
+      }
+
+      if (!name) {
+        setMessage('Task name is required.');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const taskData = {
+          name,
+          assignedTo,
+          status,
+          materialsNeeded,
+          updatedAt: serverTimestamp(),
+        };
+
+        const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
+
+        if (isEditing) {
+          const taskRef = doc(tasksCollectionRefInstance, taskToEdit.id);
+          await updateDoc(taskRef, taskData);
+          setMessage('Task updated successfully!');
+        } else {
+          taskData.createdAt = serverTimestamp();
+          await addDoc(tasksCollectionRefInstance, taskData); // Use instance of ref
+          setMessage('Task added successfully!');
+          setName('');
+          setAssignedTo('');
+          setStatus('Planned');
+          setMaterialsNeeded('');
+        }
+        onSave(); // Call the onSave callback to close the form
+      } catch (error) {
+        console.error("Error saving task:", error);
+        setMessage(`Error saving task: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="bg-white p-8 rounded-lg shadow-xl border border-blue-100">
+        <h3 className="text-2xl font-bold text-gray-800 mb-6">{isEditing ? 'Edit Task' : 'Add New Task'}</h3>
+        <form onSubmit={handleSubmit}>
+          <div className="mb-4">
+            <label htmlFor="taskName" className="block text-gray-700 text-sm font-bold mb-2">
+              Task Name:
+            </label>
+            <input
+              type="text"
+              id="taskName"
+              className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              disabled={loading}
+            />
+          </div>
+          <div className="mb-4">
+            <label htmlFor="assignedTo" className="block text-gray-700 text-sm font-bold mb-2">
+              Assigned To (e.g., Crew A, John Doe):
+            </label>
+            <input
+              type="text"
+              id="assignedTo"
+              className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={assignedTo}
+              onChange={(e) => setAssignedTo(e.target.value)}
+              disabled={loading}
+            />
+          </div>
+          <div className="mb-4">
+            <label htmlFor="taskStatus" className="block text-gray-700 text-sm font-bold mb-2">
+              Status:
+            </label>
+            <select
+              id="taskStatus"
+              className="shadow border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              disabled={loading}
+            >
+              <option value="Planned">Planned</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="On Hold">On Hold</option>
+            </select>
+          </div>
+          <div className="mb-6">
+            <label htmlFor="materialsNeeded" className="block text-gray-700 text-sm font-bold mb-2">
+              Materials Needed (e.g., 500ft fiber, 2 splice closures):
+            </label>
+            <textarea
+              id="materialsNeeded"
+              rows="2"
+              className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
+              value={materialsNeeded}
+              onChange={(e) => setMaterialsNeeded(e.target.value)}
+              disabled={loading}
+            ></textarea>
+          </div>
+          {message && (
+            <p className={`text-sm mb-4 ${message.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>
+              {message}
+            </p>
           )}
-        </>
-      )}
-
-      {/* Confirmation Modal for Deletion */}
-      {showConfirmDelete && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-          <div className="bg-white p-8 rounded-lg shadow-2xl max-w-sm w-full text-center">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">Confirm Deletion</h3>
-            <p className="text-gray-600 mb-6">Are you sure you want to delete this project and all its tasks? This action cannot be undone.</p>
-            <div className="flex justify-center space-x-4">
-              <button
-                onClick={() => setShowConfirmDelete(false)}
-                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteProject}
-                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Project Form Component (Add/Edit)
-function ProjectForm({ projectToEdit, onSave, onCancel }) {
-  const { db, appId } = useFirebase();
-  const [name, setName] = useState(projectToEdit?.name || '');
-  const [description, setDescription] = useState(projectToEdit?.description || '');
-  const [status, setStatus] = useState(projectToEdit?.status || 'Planned');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-
-  const isEditing = !!projectToEdit;
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setMessage('');
-
-    if (!db) {
-      setMessage('Database not initialized.');
-      setLoading(false);
-      return;
-    }
-
-    if (!name || !description) {
-      setMessage('Please fill in all required fields.');
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const projectData = {
-        name,
-        description,
-        status,
-        updatedAt: serverTimestamp(),
-      };
-
-      // Ensure that appId is correctly passed to getProjectsCollectionRef
-      const projectsCollectionRefInstance = getProjectsCollectionRef(db, appId); // Get instance of ref
-
-      if (isEditing) {
-        const projectRef = doc(projectsCollectionRefInstance, projectToEdit.id);
-        await updateDoc(projectRef, projectData);
-        setMessage('Project updated successfully!');
-      } else {
-        projectData.createdAt = serverTimestamp();
-        await addDoc(projectsCollectionRefInstance, projectData); // Use instance of ref
-        setMessage('Project added successfully!');
-        setName('');
-        setDescription('');
-        setStatus('Planned');
-      }
-      onSave(); // Call the onSave callback to close the form
-    } catch (error) {
-      console.error("Error saving project:", error);
-      setMessage(`Error saving project: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="bg-white p-8 rounded-lg shadow-xl">
-      <h2 className="text-3xl font-extrabold text-gray-800 mb-6">{isEditing ? 'Edit Project' : 'Add New Project'}</h2>
-      <form onSubmit={handleSubmit}>
-        <div className="mb-4">
-          <label htmlFor="name" className="block text-gray-700 text-sm font-bold mb-2">
-            Project Name:
-          </label>
-          <input
-            type="text"
-            id="name"
-            className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            disabled={loading}
-          />
-        </div>
-        <div className="mb-4">
-          <label htmlFor="description" className="block text-gray-700 text-sm font-bold mb-2">
-            Description:
-          </label>
-          <textarea
-            id="description"
-            rows="4"
-            className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            required
-            disabled={loading}
-          ></textarea>
-        </div>
-        <div className="mb-6">
-          <label htmlFor="status" className="block text-gray-700 text-sm font-bold mb-2">
-            Status:
-          </label>
-          <select
-            id="status"
-            className="shadow border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            disabled={loading}
-          >
-            <option value="Planned">Planned</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
-            <option value="On Hold">On Hold</option>
-          </select>
-        </div>
-        {message && (
-          <p className={`text-sm mb-4 ${message.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>
-            {message}
-          </p>
-        )}
-        <div className="flex justify-end space-x-4">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
-            disabled={loading}
-          >
-            {loading ? 'Saving...' : (isEditing ? 'Update Project' : 'Add Project')}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-// Task Item Component
-function TaskItem({ task, projectId }) {
-  const { db, appId } = useFirebase();
-  const [isEditing, setIsEditing] = useState(false);
-  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
-
-  // Firestore collection reference for tasks
-  const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
-
-  const handleDeleteTask = async () => {
-    try {
-      await deleteDoc(doc(tasksCollectionRefInstance, task.id)); // Use instance of ref
-      console.log("Task deleted successfully!");
-    } catch (error) {
-      console.error("Error deleting task:", error);
-    } finally {
-      setShowConfirmDelete(false); // Close modal
-    }
-  };
-
-  return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 shadow-sm mb-4">
-      {isEditing ? (
-        <TaskForm
-          projectId={projectId}
-          taskToEdit={task}
-          onSave={() => setIsEditing(false)}
-          onCancel={() => setIsEditing(false)}
-        />
-      ) : (
-        <>
-          <h4 className="text-lg font-semibold text-gray-900 mb-2">{task.name}</h4>
-          <p className="text-sm text-gray-600 mb-2">Assigned To: <span className="font-medium">{task.assignedTo || 'Unassigned'}</span></p>
-          <p className="text-sm text-gray-600 mb-2">Materials: <span className="font-medium">{task.materialsNeeded || 'None'}</span></p>
-          <div className="flex items-center text-sm text-gray-500">
-            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-              task.status === 'Planned' ? 'bg-blue-100 text-blue-800' :
-              task.status === 'In Progress' ? 'bg-yellow-100 text-yellow-800' :
-              task.status === 'Completed' ? 'bg-green-100 text-green-800' :
-              'bg-gray-100 text-gray-800'
-            }`}>
-              {task.status}
-            </span>
-            {task.createdAt && (
-              <span className="ml-auto text-gray-500">
-                Created: {new Date(task.createdAt.toDate()).toLocaleDateString()}
-              </span>
-            )}
-          </div>
-          <div className="flex justify-end space-x-2 mt-4">
+          <div className="flex justify-end space-x-4">
             <button
-              onClick={() => setIsEditing(true)}
-              className="text-[#33cc33] hover:text-[#28a428] font-medium text-sm transition duration-300"
+              type="button"
+              onClick={onCancel}
+              className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
+              disabled={loading}
             >
-              Edit
+              Cancel
             </button>
             <button
-              onClick={() => setShowConfirmDelete(true)}
-              className="text-red-600 hover:text-red-800 font-medium text-sm transition duration-300"
+              type="submit"
+              className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
+              disabled={loading}
             >
-              Delete
+              {loading ? 'Saving...' : (isEditing ? 'Update Task' : 'Add Task')}
             </button>
           </div>
-        </>
-      )}
+        </form>
+      </div>
+    );
+  }
 
-      {/* Confirmation Modal for Deletion */}
-      {showConfirmDelete && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-          <div className="bg-white p-8 rounded-lg shadow-2xl max-w-sm w-full text-center">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">Confirm Task Deletion</h3>
-            <p className="text-gray-600 mb-6">Are you sure you want to delete this task? This action cannot be undone.</p>
-            <div className="flex justify-center space-x-4">
-              <button
-                onClick={() => setShowConfirmDelete(false)}
-                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteTask}
-                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Task Form Component (Add/Edit)
-function TaskForm({ projectId, taskToEdit, onSave, onCancel }) {
-  const { db, appId } = useFirebase();
-  const [name, setName] = useState(taskToEdit?.name || '');
-  const [assignedTo, setAssignedTo] = useState(taskToEdit?.assignedTo || '');
-  const [status, setStatus] = useState(taskToEdit?.status || 'Planned');
-  const [materialsNeeded, setMaterialsNeeded] = useState(taskToEdit?.materialsNeeded || '');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-
-  const isEditing = !!taskToEdit;
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setMessage('');
-
-    if (!db) {
-      setMessage('Database not initialized.');
-      setLoading(false);
-      return;
-    }
-
-    if (!name) {
-      setMessage('Task name is required.');
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const taskData = {
-        name,
-        assignedTo,
-        status,
-        materialsNeeded,
-        updatedAt: serverTimestamp(),
-      };
-
-      const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
-
-      if (isEditing) {
-        const taskRef = doc(tasksCollectionRefInstance, taskToEdit.id);
-        await updateDoc(taskRef, taskData);
-        setMessage('Task updated successfully!');
-      } else {
-        taskData.createdAt = serverTimestamp();
-        await addDoc(tasksCollectionRefInstance, taskData); // Use instance of ref
-        setMessage('Task added successfully!');
-        setName('');
-        setAssignedTo('');
-        setStatus('Planned');
-        setMaterialsNeeded('');
-      }
-      onSave(); // Call the onSave callback to close the form
-    } catch (error) {
-      console.error("Error saving task:", error);
-      setMessage(`Error saving task: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="bg-white p-8 rounded-lg shadow-xl border border-blue-100">
-      <h3 className="text-2xl font-bold text-gray-800 mb-6">{isEditing ? 'Edit Task' : 'Add New Task'}</h3>
-      <form onSubmit={handleSubmit}>
-        <div className="mb-4">
-          <label htmlFor="taskName" className="block text-gray-700 text-sm font-bold mb-2">
-            Task Name:
-          </label>
-          <input
-            type="text"
-            id="taskName"
-            className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            disabled={loading}
-          />
-        </div>
-        <div className="mb-4">
-          <label htmlFor="assignedTo" className="block text-gray-700 text-sm font-bold mb-2">
-            Assigned To (e.g., Crew A, John Doe):
-          </label>
-          <input
-            type="text"
-            id="assignedTo"
-            className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={assignedTo}
-            onChange={(e) => setAssignedTo(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-        <div className="mb-4">
-          <label htmlFor="taskStatus" className="block text-gray-700 text-sm font-bold mb-2">
-            Status:
-          </label>
-          <select
-            id="taskStatus"
-            className="shadow border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            disabled={loading}
-          >
-            <option value="Planned">Planned</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
-            <option value="On Hold">On Hold</option>
-          </select>
-        </div>
-        <div className="mb-6">
-          <label htmlFor="materialsNeeded" className="block text-gray-700 text-sm font-bold mb-2">
-            Materials Needed (e.g., 500ft fiber, 2 splice closures):
-          </label>
-          <textarea
-            id="materialsNeeded"
-            rows="2"
-            className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-[#33cc33] focus:border-transparent" // Green focus ring
-            value={materialsNeeded}
-            onChange={(e) => setMaterialsNeeded(e.target.value)}
-            disabled={loading}
-          ></textarea>
-        </div>
-        {message && (
-          <p className={`text-sm mb-4 ${message.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>
-            {message}
-          </p>
-        )}
-        <div className="flex justify-end space-x-4">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300"
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="bg-[#33cc33] hover:bg-[#28a428] text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
-            disabled={loading}
-          >
-            {loading ? 'Saving...' : (isEditing ? 'Update Task' : 'Add Task')}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-// Wrap the main App component with the FirebaseProvider
-export default function WrappedApp() {
-  return (
-    <FirebaseProvider>
-      <App />
-    </FirebaseProvider>
-  );
-}
+  // Wrap the main App component with the FirebaseProvider
+  export default function WrappedApp() {
+    return (
+      <FirebaseProvider>
+        <App />
+      </FirebaseProvider>
+    );
+  }
 
