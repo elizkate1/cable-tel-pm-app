@@ -1,10 +1,10 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback } from 'react'; // Added useCallback
 // ALL FIREBASE IMPORTS MUST BE AT THE TOP LEVEL OF THE FILE
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from 'firebase/firestore';
 // Import the functions you need from the SDKs you need
-import { getAnalytics } from "firebase/analytics"; // Added getAnalytics import
+// Removed getAnalytics as it was unused and causing a warning.
 
 // Create a context for Firebase services
 const FirebaseContext = createContext(null);
@@ -42,8 +42,8 @@ function FirebaseProvider({ children }) {
 
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
-        // Initialize Analytics (optional, but included as per your request)
-        const analytics = getAnalytics(app); // Initialized analytics
+        // Analytics initialization removed as it was unused and causing a warning.
+        // const analytics = getAnalytics(app); 
 
         const firestore = getFirestore(app);
         const firebaseAuth = getAuth(app);
@@ -96,8 +96,9 @@ function FirebaseProvider({ children }) {
   }
 
   // Pass the canvasAppId to the context provider
+  // Ensure db.app.options.projectId is available before using it
   return (
-    <FirebaseContext.Provider value={{ db, auth, userId, appId: db ? db.app.options.projectId : 'default-fiber-pm-app' }}>
+    <FirebaseContext.Provider value={{ db, auth, userId, appId: db?.app?.options?.projectId || 'default-fiber-pm-app' }}>
       {children}
     </FirebaseContext.Provider>
   );
@@ -108,9 +109,16 @@ function useFirebase() {
   return useContext(FirebaseContext);
 }
 
-// Project Data Model (Simplified)
-// In a real app, these would be more complex and normalized
-const initialProjects = []; // Will be loaded from Firestore
+// Firestore collection reference functions (moved outside components for stability)
+// Wrapped in useCallback to ensure stable function references for useEffect dependencies
+const getProjectsCollectionRef = useCallback((db, appId) => {
+  return collection(db, `artifacts/${appId}/public/data/projects`);
+}, []); // Empty dependency array means this function reference is stable
+
+const getTasksCollectionRef = useCallback((db, appId, projId) => {
+  return collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
+}, []); // Empty dependency array means this function reference is stable
+
 
 // Main App Component
 function App() {
@@ -123,17 +131,14 @@ function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [activeView, setActiveView] = useState('list'); // 'list' or 'detail'
 
-  // Firestore collection reference for projects
-  const getProjectsCollectionRef = () => {
-    // Using public data path as per instructions
-    return collection(db, `artifacts/${appId}/public/data/projects`);
-  };
 
   // Fetch projects from Firestore
   useEffect(() => {
     if (!db || !userId) return;
 
-    const q = query(getProjectsCollectionRef(), orderBy('createdAt', 'desc'));
+    // Pass db and appId to the ref function
+    const projectsRef = getProjectsCollectionRef(db, appId);
+    const q = query(projectsRef, orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const projectsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -147,8 +152,9 @@ function App() {
     });
 
     // Cleanup subscription on unmount
+    // getProjectsCollectionRef is now a stable function due to useCallback
     return () => unsubscribe();
-  }, [db, userId, appId]); // Depend on db, userId, and appId
+  }, [db, userId, appId, getProjectsCollectionRef]); // Added getProjectsCollectionRef to dependency array
 
   const handleSelectProject = (projectId) => {
     setSelectedProjectId(projectId);
@@ -294,14 +300,16 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false); // State for confirmation modal
 
   // Firestore collection references
-  const getProjectsCollectionRef = () => collection(db, `artifacts/${appId}/public/data/projects`);
-  const getTasksCollectionRef = (projId) => collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
+  // Use useCallback for these functions to ensure stable references
+  const projectsCollectionRef = useCallback(() => getProjectsCollectionRef(db, appId), [db, appId]);
+  const tasksCollectionRef = useCallback((projId) => getTasksCollectionRef(db, appId, projId), [db, appId]);
+
 
   // Fetch project details
   useEffect(() => {
     if (!db || !projectId) return;
 
-    const docRef = doc(getProjectsCollectionRef(), projectId);
+    const docRef = doc(projectsCollectionRef(), projectId); // Call the function to get the ref
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         setProject({ id: docSnap.id, ...docSnap.data() });
@@ -316,13 +324,13 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
     });
 
     return () => unsubscribe();
-  }, [db, projectId, appId]);
+  }, [db, projectId, projectsCollectionRef]); // Add projectsCollectionRef to dependency array
 
   // Fetch tasks for the project
   useEffect(() => {
     if (!db || !projectId) return;
 
-    const q = query(getTasksCollectionRef(projectId), orderBy('createdAt', 'asc'));
+    const q = query(tasksCollectionRef(projectId), orderBy('createdAt', 'asc')); // Call the function to get the ref
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -336,18 +344,18 @@ function ProjectDetailView({ projectId, onBack, onAddTask }) {
     });
 
     return () => unsubscribe();
-  }, [db, projectId, appId]);
+  }, [db, projectId, tasksCollectionRef]); // Add tasksCollectionRef to dependency array
 
   const handleDeleteProject = async () => {
     try {
       if (project) {
         // Delete all tasks first
-        const taskDocs = await getDocs(getTasksCollectionRef(project.id));
-        const deletePromises = taskDocs.docs.map(tDoc => deleteDoc(doc(getTasksCollectionRef(project.id), tDoc.id)));
+        const taskDocs = await getDocs(tasksCollectionRef(project.id)); // Call the function
+        const deletePromises = taskDocs.docs.map(tDoc => deleteDoc(doc(tasksCollectionRef(project.id), tDoc.id))); // Call the function
         await Promise.all(deletePromises);
 
         // Then delete the project
-        await deleteDoc(doc(getProjectsCollectionRef(), project.id));
+        await deleteDoc(doc(projectsCollectionRef(), project.id)); // Call the function
         onBack(); // Go back to list after deletion
       }
     } catch (error) {
@@ -532,13 +540,16 @@ function ProjectForm({ projectToEdit, onSave, onCancel }) {
         updatedAt: serverTimestamp(),
       };
 
+      // Ensure that appId is correctly passed to getProjectsCollectionRef
+      const projectsCollectionRefInstance = getProjectsCollectionRef(db, appId); // Get instance of ref
+
       if (isEditing) {
-        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectToEdit.id);
+        const projectRef = doc(projectsCollectionRefInstance, projectToEdit.id);
         await updateDoc(projectRef, projectData);
         setMessage('Project updated successfully!');
       } else {
         projectData.createdAt = serverTimestamp();
-        await addDoc(collection(db, `artifacts/${appId}/public/data/projects`), projectData);
+        await addDoc(projectsCollectionRefInstance, projectData); // Use instance of ref
         setMessage('Project added successfully!');
         setName('');
         setDescription('');
@@ -637,11 +648,11 @@ function TaskItem({ task, projectId }) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
 
   // Firestore collection reference for tasks
-  const getTasksCollectionRef = (projId) => collection(db, `artifacts/${appId}/public/data/projects/${projId}/tasks`);
+  const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
 
   const handleDeleteTask = async () => {
     try {
-      await deleteDoc(doc(getTasksCollectionRef(projectId), task.id));
+      await deleteDoc(doc(tasksCollectionRefInstance, task.id)); // Use instance of ref
       console.log("Task deleted successfully!");
     } catch (error) {
       console.error("Error deleting task:", error);
@@ -762,15 +773,15 @@ function TaskForm({ projectId, taskToEdit, onSave, onCancel }) {
         updatedAt: serverTimestamp(),
       };
 
-      const tasksCollectionRef = collection(db, `artifacts/${appId}/public/data/projects/${projectId}/tasks`);
+      const tasksCollectionRefInstance = getTasksCollectionRef(db, appId, projectId); // Get instance of ref
 
       if (isEditing) {
-        const taskRef = doc(tasksCollectionRef, taskToEdit.id);
+        const taskRef = doc(tasksCollectionRefInstance, taskToEdit.id);
         await updateDoc(taskRef, taskData);
         setMessage('Task updated successfully!');
       } else {
         taskData.createdAt = serverTimestamp();
-        await addDoc(tasksCollectionRef, taskData);
+        await addDoc(tasksCollectionRefInstance, taskData); // Use instance of ref
         setMessage('Task added successfully!');
         setName('');
         setAssignedTo('');
